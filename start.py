@@ -13,6 +13,10 @@ class CameraSubscriber:
 
         self.gray = None
 
+        self.square_red = []
+        self.square_blue = []
+        self.stop = False
+
         # self.list_red = []
         # self.list_blue = []
 
@@ -43,6 +47,9 @@ class CameraSubscriber:
             # Условие, которое срабатывает, если найден треугольник
             if triangle_detected:
                 print("Треугольник найден!")
+                if self.stop:
+                    print("STOOOOOOOP")
+                    break
 
             # Показываем изображение с помощью OpenCV
             cv2.imshow("Camera Frame with ArUco Detection", frame)
@@ -55,8 +62,16 @@ class CameraSubscriber:
         self.cap.release()
         cv2.destroyAllWindows()
 
-        print(f"self.list_red = {self.list_red}")
-        print(f"self.list_blue = {self.list_blue}")
+
+        # print(self.square_blue)
+        # print(self.square_red)
+        # print(f"max is {max(self.square_red)}")
+        # print(f"min is {min(self.square_red)}")
+        # print(f"max is {max(self.square_blue)}")
+        # print(f"min is {min(self.square_blue)}")
+
+        # print(f"self.list_red = {self.list_red}")
+        # print(f"self.list_blue = {self.list_blue}")
 
     def draw_detected_markers(self, frame, corners, ids=None):
         # Перебираем каждый обнаруженный маркер
@@ -86,7 +101,6 @@ class CameraSubscriber:
         # Рассчитаем центр маркера для отрисовки текста
         return np.mean(corner, axis=1).astype(int)[0]
 
-    
     def detect_pointer(self, frame):
         # Преобразуем изображение в HSV
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -118,22 +132,47 @@ class CameraSubscriber:
         cv2.imshow("blue mask", mask_blue)
 
         # Проверяем наличие треугольников в красных контурах
-        triangle_found = self.check_triangles(mask_red, contours_red, "red")
+        triangle_found = self.check_triangles(mask_red, contours_red, "red")        
+        self.square_red.append(triangle_found[-1])
+        
         # if triangle_found:
             # self.list_red.append(triangle_found)
 
+        if triangle_found[-1] > 90000:
+            self.stop = True
+            return triangle_found
         
-        # Если не найден красный треугольник, проверяем синий
-        if not triangle_found:
-            triangle_found = self.check_triangles(mask_blue, contours_blue, "blue")
+        # Если не найден красный треугольник, проверяем синий        
+        triangle_found = self.check_triangles(mask_blue, contours_blue, "blue")        
+        self.square_blue.append(triangle_found[-1])
             # self.list_blue.append(triangle_found)
         
+        if triangle_found[-1] > 90000:
+            self.stop = True
+            return triangle_found
         
 
         return triangle_found
 
+    def calculate_triangle_area(self, contour):
+        # Вычисляем моменты для контура
+        moments = cv2.moments(contour)
+        if moments['m00'] != 0:
+            # Вычисляем координаты центра масс
+            cx = int(moments['m10'] / moments['m00'])
+            cy = int(moments['m01'] / moments['m00'])
+        else:
+            # Если не удается вычислить, то площадь равна нулю
+            return 0
+
+        # Вычисляем площадь треугольника
+        area = cv2.contourArea(contour)
+        return area
+    
     def check_triangles(self, frame, contours, color_name):
         triangle_found = False
+        total_area = 0
+
         for contour in contours:
             # Вычисляем периметр контура
             perimeter = cv2.arcLength(contour, True)
@@ -145,14 +184,20 @@ class CameraSubscriber:
             if len(approx) == 3:
                 triangle_found = True
 
+                # Вычисляем площадь треугольника
+                area = self.calculate_triangle_area(approx)
+                total_area += area
+
                 # Рисуем контур треугольника
                 cv2.drawContours(frame, [approx], -1, (0, 255, 0), 2)
 
                 # Печатаем цвет треугольника
                 print(f"{color_name} треугольник найден!")
+                print(f"Площадь равна: {total_area}")
 
-        return triangle_found
+        return triangle_found, total_area
 
+    
 
 
 
