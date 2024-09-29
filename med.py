@@ -12,11 +12,11 @@ rospy.init_node("along_wall")
 timer = 0
 cl = False
 first = True
-aruco_marker = True
-cmd = Twist()
+aruco_marker = False  # флаг - обнаружен ли маркер ArUco | changed True to False
+cmd = Twist()  # управление лин и угл скоростью робота
 cmd.linear.x = 20
-target = 0.3
-target_aruco = 0  # Здесь будем сохранять ID первого маркера
+target = 0.3  # расстояние от стены
+target_aruco = 0
 
 Kp = 325
 Kd = 325
@@ -35,14 +35,14 @@ def callback_scan(msg):
     global move
     global target_aruco
     global target
-    global first
+    global first  # обозначение первый ли цикл
 
     if move:
         global last_dist
-        min_ranges = min(msg.ranges)
+        min_ranges = min(msg.ranges)  # мин расстояние до препятствий
         dX = min_ranges - last_dist
-        error = target - min_ranges
-        cmd.angular.z = Kp * error - Kd * dX
+        error = target - min_ranges  #
+        cmd.angular.z = Kp * error - Kd * dX  # изменение угла поворота
         if not aruco_marker and not first:
             pub.publish(cmd)
         last_dist = min_ranges
@@ -72,24 +72,25 @@ def callback_img(msg):
                 aruco_marker = True
                 first = False
                 move = True
-                print("target:", target_aruco)
-            else:
-                for i in range(len(ids)):
-                    if ids[i] == target_aruco:
-                        c = corners[i]
-                        M = cv2.moments(c)
-                        cX = int(M["m10"] / M["m00"])
-                        # cY = int(M["m01"] / M["m00"])
+                print(f"target: {target_aruco}")
 
-                        cmd.angular.z = -(320 - cX) / 20
-                        pub.publish(cmd)
-
-        if len(corners) >= 3:
+        elif len(corners) > 2 and aruco_marker:
             timer = time.time()
-            aruco_marker = True
             move = False
 
-        if time.time() - timer > 10 and aruco_marker is True:
+            # Как будет происходить процесс выравнивания не понятно
+            # Ясно как он выравнивается, но для этого он должен занять нужное положение (что-то типа центра)
+            for i in range(len(ids)):
+                if ids[i] == target_aruco:
+                    c = corners[i]
+                    M = cv2.moments(c)
+                    cX = int(M["m10"] / M["m00"])
+                    # cY = int(M["m01"] / M["m00"])
+
+                    cmd.angular.z = -(320 - cX) / 20
+                    pub.publish(cmd)                        
+
+        if time.time() - timer > 10 and aruco_marker:
             move = True
             aruco_marker = False
             cmd.angular.z = 0
@@ -108,3 +109,9 @@ rospy.Subscriber("/scan", LaserScan, callback_scan)
 bridge = CvBridge()
 rospy.Subscriber("/usb_cam/image_raw/compressed", CompressedImage, callback_img)
 rospy.spin()
+
+"""
+Пропорциональная составляющая (Kp * error): Чем больше ошибка, тем больше будет управляющее воздействие, направленное на уменьшение этой ошибки.
+Дифференциальная составляющая (Kd * dX): Учитывает скорость изменения ошибки. Если ошибка быстро возрастает, то дифференциальная составляющая будет стремиться уменьшить это возрастание, а если ошибка быстро уменьшается, то дифференциальная составляющая будет стремиться поддержать это уменьшение.
+
+"""

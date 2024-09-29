@@ -1,5 +1,5 @@
 import rospy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage
 import cv2
 from cv_bridge import CvBridge
 import numpy as np
@@ -9,18 +9,22 @@ import move
 class CameraSubscriber:
     def __init__(self):
         # Инициализация узла ROS
+        print("check.init")
         rospy.init_node("camera_subscriber", anonymous=True)
-        self.subscription = rospy.Subscriber("/image_raw", Image, self.listener_callback)
+        self.subscription = rospy.Subscriber(
+            "/usb_cam/image_raw/compressed", CompressedImage, self.listener_callback
+        )
 
         self.br = CvBridge()
 
         # Настройки для ArUco
         self.dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_250)
-        self.parameters = cv2.aruco.DetectorParameters()
-        self.detector = cv2.aruco.ArucoDetector(self.dictionary, self.parameters)        
+        self.parameters = cv2.aruco.DetectorParameters_create()
+        # Use the old way to detect markers
+        self.detector = cv2.aruco
 
         self.gray = None
-        self.id_marker = 0 # id для считывания маркера
+        self.id_markers = []  # ids для считывания маркера
 
         # Списки для площадей
         self.square_red = []
@@ -28,39 +32,45 @@ class CameraSubscriber:
 
         # Свойства для движения
         self.stop = False
-        self.robot_movings = move.robot_movings()
-        
+        self.RobotMovings = move.RobotMovings()
+
         # Отслеживание цвета треугольника
         self.color = ""
-        
-        self.robot_movings.move()
-
 
     def listener_callback(self, msg):
-        # Конвертируем ROS Image в OpenCV формат
-        frame = self.br.imgmsg_to_cv2(msg, "bgr8")
+        print("check.listener")
+        # Convert CompressedImage to an OpenCV format
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
         # Переводим изображение в оттенки серого для обработки ArUco маркеров
         self.gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         # Обнаружение ArUco маркеров
-        corners, ids, rejected_img_points = self.detector.detectMarkers(self.gray)
+        corners, ids, rejected_img_points = cv2.aruco.detectMarkers(
+            self.gray, self.dictionary, parameters=self.parameters
+        )
 
         # Если маркеры найдены, отобразить их
         if len(corners) > 0:
             print("Marker detected!")
-            self.draw_detected_markers(frame, corners, ids)
-            self.id_marker = ids.flatten()
-            print(f"Detected marker ID: {self.id_marker}")
+            self.draw_detected_markers(frame, corners, ids)            
 
-            # Stop the robot once the marker is detected
-            self.robot_movings.stop_move()
-            self.stop = True
+            # rotate the robot when the marker is detected
+            self.RobotMovings.stop_move()
+
+            if len(self.id_markers) < 2:
+                self.RobotMovings.rotate_by_90_to_left()
+                self.RobotMovings.move()
+
+            # rotate by 180 the robot if it took the med
+            elif len(self.id_markers) > 1:
+                self.RobotMovings.rotate_by_180_to_left()
+                self.RobotMovings.move()
 
         # If no marker is detected, keep the robot moving
-        if not self.stop:
-            self.robot_movings.move()
-
+        # if not self.stop:
+        #     self.RobotMovings.move()
 
         # Запускаем функцию для отслеживания треугольника и определения его цвета
         triangle_detected = self.detect_pointer(frame)
@@ -70,17 +80,17 @@ class CameraSubscriber:
             print("Треугольник найден!")
             if self.stop:
                 print("STOOOOOOOP")
-                self.robot_movings.stop_move()
+                self.RobotMovings.stop_move()
 
                 if self.color == "red":
-                    self.robot_movings.rotate_by_90_to_left()
-                    self.robot_movings.move()
+                    self.RobotMovings.rotate_by_90_to_left()
+                    self.RobotMovings.move()
                 elif self.color == "blue":
-                    self.robot_movings.rotate_by_90_to_right()
-                    self.robot_movings.move()
+                    self.RobotMovings.rotate_by_90_to_right()
+                    self.RobotMovings.move()
 
         # Показываем изображение с помощью OpenCV
-        cv2.imshow("Camera Frame with ArUco Detection", frame)
+        # cv2.imshow("Camera Frame with ArUco Detection", frame)
 
         # Ждем 1 миллисекунду и обрабатываем нажатие клавиши 'q' для выхода
         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -98,10 +108,15 @@ class CameraSubscriber:
             # Рисуем контур маркера, соединяя его углы
             cv2.polylines(
                 frame, [corner], isClosed=True, color=(0, 255, 0), thickness=2
-            )
+            )            
 
             # Если есть список идентификаторов, то подпишем маркеры
             if ids is not None:
+                if ids[i][0] not in self.id_markers:
+                    self.id_markers.append(ids[i][0])
+
+                print(f"Detected marker ID: {ids[i][0]}")
+
                 center = self.detect_center_marker(corner)
                 cv2.putText(
                     frame,
@@ -139,22 +154,23 @@ class CameraSubscriber:
 
         mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
 
-        contours_red, _ = cv2.findContours(
-            mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        contours_blue, _ = cv2.findContours(
-            mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
+        # contours_red = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+        # contours_blue = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+        # In OpenCV 3.x, findContours returns 3 values: image, contours, and hierarchy
 
-        cv2.imshow("red mask", mask_red)
-        cv2.imshow("blue mask", mask_blue)
+        _, contours_red, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        _, contours_blue, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+
+        # cv2.imshow("red mask", mask_red)
+        # cv2.imshow("blue mask", mask_blue)
 
         triangle_found = self.check_triangles(mask_red, contours_red, "red")
         self.square_red.append(triangle_found[-1])
 
         if triangle_found[-1] > 90000:
             self.stop = True
-            self.robot_movings.stop_move()
+            self.RobotMovings.stop_move()
             return triangle_found
 
         triangle_found = self.check_triangles(mask_blue, contours_blue, "blue")
@@ -162,7 +178,7 @@ class CameraSubscriber:
 
         if triangle_found[-1] > 90000:
             self.stop = True
-            self.robot_movings.stop_move()
+            self.RobotMovings.stop_move()
             return triangle_found
 
         return triangle_found
